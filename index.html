@@ -31,7 +31,7 @@
   .hint{color:var(--muted);font-size:11px;line-height:1.55;margin-top:6px}
   textarea{width:100%;height:96px;background:rgba(0,0,0,.35);color:#dfe8f5;border:1px solid var(--line);
     border-radius:8px;padding:8px;font-size:10.5px;resize:vertical}
-  main{position:relative;min-width:0}
+  main{position:relative;min-width:0;touch-action:none}
   #c{position:absolute;inset:0;display:block;width:100%;height:100%;touch-action:none}
   #vf{position:absolute;right:14px;bottom:14px;width:322px;height:182px;pointer-events:none;
     border:1px solid rgba(242,181,68,.55);border-radius:4px;display:none}
@@ -67,7 +67,7 @@
 <div class="app">
 <aside>
   <h1>CHURCH NIGHT 3D PREVIZ</h1>
-  <p class="sub">Real-world metric scale · full-frame lens simulation · aerial reference on ground. Drag objects to move, <span class="kbd">Q</span>/<span class="kbd">E</span> to rotate, arrow keys to nudge.</p>
+  <p class="sub">Real-world metric scale · full-frame lens simulation · aerial reference on ground.<br><b>Mouse:</b> left-drag orbit · right-drag pan · wheel zoom · drag objects to move.<br><b>iPad:</b> one finger orbit · two fingers pan + pinch zoom · touch &amp; drag an object/camera to move it.</p>
 
   <div class="info" id="selInfo">Nothing selected. Click a vehicle, person or camera to begin.</div>
   <div style="margin-top:6px">
@@ -149,11 +149,11 @@
     <div class="card">
       <h2>HOW TO USE</h2>
       <ol>
-        <li><b>Look around</b> — left-drag to orbit, right-drag to pan, mouse wheel to zoom.</li>
-        <li><b>Move things</b> — click a car / person / camera and drag it on the ground. <span class="kbd">Q</span>/<span class="kbd">E</span> rotate, arrow keys nudge (Shift = bigger step).</li>
-        <li><b>Cameras</b> — pick CAM-A/B/C in the sidebar or click a camera marker in the scene. The bottom-right <b>viewfinder</b> shows exactly what that lens sees. Set focal length 21–135mm (true full-frame FOV), pan / tilt / height, or press <i>Aim at selected object</i>.</li>
-        <li><b>Fullscreen viewfinder</b> — judge the composition full screen; Esc to exit.</li>
-        <li><b>Export JSON</b> — saves all positions (meters) + camera data, ready for the Blender → FBX → Unreal step.</li>
+        <li><b>Look around</b> — <u>Mouse:</u> left-drag orbit, right-drag pan, wheel zoom. <u>iPad:</u> one finger to orbit, two fingers to pan and pinch-zoom.</li>
+        <li><b>Move things</b> — touch or click a car / person / camera and drag it on the ground. <span class="kbd">Q</span>/<span class="kbd">E</span> rotate, arrow keys nudge (Shift = bigger step).</li>
+        <li><b>Cameras</b> — pick CAM-A/B/C in the sidebar or tap a camera marker in the scene. The bottom-right <b>viewfinder</b> shows exactly what that lens sees. Set focal length 21–135mm (true full-frame FOV), pan / tilt / height, or press <i>Aim at selected object</i>.</li>
+        <li><b>Fullscreen viewfinder</b> — judge the composition full screen; Esc or the button to exit.</li>
+        <li><b>Export JSON</b> — saves all positions (meters) + camera data.</li>
       </ol>
       <button id="closeHelp" class="on">Start</button>
     </div>
@@ -669,21 +669,45 @@ $('importBtn').onclick=()=>{
 };
 $('resetBtn').onclick=()=>location.reload();
 
-/* ================= pointer interaction ================= */
+/* ================= pointer interaction (mouse + multi-touch) ================= */
 const ray = new THREE.Raycaster(); const ndc = new THREE.Vector2();
 const groundPlane = new THREE.Plane(new THREE.Vector3(0,1,0),0);
 let dragging=null, orbiting=null, moved=false, lastObjSelected=null;
-function setNDC(e){
+const activePointers = new Map();   // pointerId -> {x,y}
+let pinchStart=null;                // {dist, r, cx, cy}
+
+function setNDCxy(clientX, clientY){
   const r=canvas.getBoundingClientRect();
-  ndc.x=((e.clientX-r.left)/r.width)*2-1;
-  ndc.y=-((e.clientY-r.top)/r.height)*2+1;
+  ndc.x=((clientX-r.left)/r.width)*2-1;
+  ndc.y=-((clientY-r.top)/r.height)*2+1;
 }
+function pointerList(){ return [...activePointers.values()]; }
+function twoFingerMid(){
+  const p=pointerList(); return {x:(p[0].x+p[1].x)/2, y:(p[0].y+p[1].y)/2}; }
+function twoFingerDist(){
+  const p=pointerList(); return Math.hypot(p[0].x-p[1].x, p[0].y-p[1].y); }
+
 canvas.addEventListener('contextmenu',e=>e.preventDefault());
+
 canvas.addEventListener('pointerdown',e=>{
   if(fullscreenCam) return;
-  setNDC(e); moved=false;
+  canvas.setPointerCapture(e.pointerId);
+  activePointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+
+  // second finger down → enter pinch/pan mode, cancel any single-finger action
+  if(activePointers.size===2){
+    dragging=null; orbiting=null;
+    pinchStart={dist:twoFingerDist(), r:orb.r, mid:twoFingerMid()};
+    return;
+  }
+  if(activePointers.size>2) return;
+
+  // single pointer: try to grab an object first (left button / touch)
+  moved=false;
+  setNDCxy(e.clientX,e.clientY);
   ray.setFromCamera(ndc, orbitCam);
-  if(e.button===0){
+  const isPrimaryDrag = (e.pointerType!=='mouse') || e.button===0;
+  if(isPrimaryDrag){
     const hits = ray.intersectObjects(pickMeshes);
     if(hits.length){
       const root = hits[0].object.userData.root;
@@ -692,16 +716,38 @@ canvas.addEventListener('pointerdown',e=>{
       else lastObjSelected = root;
       const hit=new THREE.Vector3(); ray.ray.intersectPlane(groundPlane,hit);
       dragging={root, off:hit.clone().sub(new THREE.Vector3(root.position.x,0,root.position.z))};
-      updateInfo(); canvas.setPointerCapture(e.pointerId);
+      updateInfo();
       return;
     }
   }
-  orbiting={btn:e.button, x:e.clientX, y:e.clientY};
-  canvas.setPointerCapture(e.pointerId);
+  // empty space → orbit (touch/left) or pan (right mouse)
+  const panMode = (e.pointerType==='mouse' && e.button===2);
+  orbiting={pan:panMode, x:e.clientX, y:e.clientY};
 });
+
 canvas.addEventListener('pointermove',e=>{
+  if(!activePointers.has(e.pointerId)) {
+    // still track mouse hover position? not needed
+  }
+  if(activePointers.has(e.pointerId)) activePointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+
+  // two-finger pinch-zoom + pan
+  if(pinchStart && activePointers.size===2){
+    const d=twoFingerDist();
+    orb.r = Math.min(140, Math.max(4, pinchStart.r * (pinchStart.dist/Math.max(1,d))));
+    const mid=twoFingerMid();
+    const dx=mid.x-pinchStart.mid.x, dy=mid.y-pinchStart.mid.y;
+    const f=orb.r*.0016;
+    const right=new THREE.Vector3().subVectors(orbitCam.position,orb.target).cross(new THREE.Vector3(0,1,0)).normalize();
+    const fwd=new THREE.Vector3(0,1,0).cross(right).normalize();
+    orb.target.addScaledVector(right, dx*f).addScaledVector(fwd, -dy*f);
+    pinchStart.mid=mid;
+    applyOrbit();
+    return;
+  }
+
   if(dragging){
-    moved=true; setNDC(e);
+    moved=true; setNDCxy(e.clientX,e.clientY);
     ray.setFromCamera(ndc, orbitCam);
     const hit=new THREE.Vector3();
     if(ray.ray.intersectPlane(groundPlane,hit)){
@@ -716,7 +762,7 @@ canvas.addEventListener('pointermove',e=>{
   if(orbiting){
     const dx=e.clientX-orbiting.x, dy=e.clientY-orbiting.y;
     if(Math.abs(dx)+Math.abs(dy)>2) moved=true;
-    if(orbiting.btn===0){ orb.theta += dx*.005; orb.phi = Math.min(1.5, Math.max(.08, orb.phi - dy*.005)); }
+    if(!orbiting.pan){ orb.theta += dx*.005; orb.phi = Math.min(1.5, Math.max(.08, orb.phi - dy*.005)); }
     else {
       const f=orb.r*.0016;
       const right=new THREE.Vector3().subVectors(orbitCam.position,orb.target).cross(new THREE.Vector3(0,1,0)).normalize();
@@ -727,13 +773,23 @@ canvas.addEventListener('pointermove',e=>{
     applyOrbit();
   }
 });
-canvas.addEventListener('pointerup',e=>{
-  if(orbiting && !moved && e.button===0){
-    selected=null; activeCam=null; ui.vf.style.display='none';
-    cams.forEach(refreshCamMarker); rebuildCamList(); updateInfo();
+
+function endPointer(e){
+  activePointers.delete(e.pointerId);
+  if(activePointers.size<2) pinchStart=null;
+  // tap on empty space with no movement → deselect (only when all fingers up)
+  if(activePointers.size===0){
+    if(orbiting && !moved && !orbiting.pan){
+      selected=null; activeCam=null; ui.vf.style.display='none';
+      cams.forEach(refreshCamMarker); rebuildCamList(); updateInfo();
+    }
+    dragging=null; orbiting=null;
   }
-  dragging=null; orbiting=null;
-});
+  requestRender();
+}
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
+
 canvas.addEventListener('wheel',e=>{
   e.preventDefault();
   orb.r = Math.min(140, Math.max(4, orb.r*(1+e.deltaY*.001)));
