@@ -65,17 +65,23 @@
     font-size:12px;line-height:1.5;color:#ffe3dd}
   @media (max-width: 820px){
     .app{display:block;height:100vh}
-    aside{position:fixed;left:0;top:0;bottom:0;width:min(86vw,322px);max-width:322px;z-index:80;
+    aside{position:fixed;left:0;top:0;bottom:0;width:clamp(230px,64vw,276px);max-width:none;z-index:80;
+      padding:12px 10px 34px;background:rgba(16,20,27,.88);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
       transform:translateX(-102%);transition:transform .22s ease;box-shadow:18px 0 45px rgba(0,0,0,.45)}
     body.sidebar-open aside{transform:translateX(0)}
     main{height:100vh;width:100vw}
     #panelToggle{display:block}
-    body.sidebar-open #panelToggle{left:calc(min(86vw,322px) + 10px)}
+    body.sidebar-open #panelToggle{left:calc(clamp(230px,64vw,276px) + 8px)}
     .badge{left:104px;right:10px;top:14px;font-size:10px}
     #helpBtn{right:10px;top:52px}
     #vf{right:10px;bottom:10px;width:min(42vw,220px);height:min(24vw,124px)}
     #errBox{left:10px;right:10px;bottom:10px;font-size:11px}
-    input[type=range]{width:128px}
+    h1{font-size:12px}
+    .sub{font-size:10.5px;line-height:1.35}
+    label.row{font-size:11.5px;gap:6px}
+    input[type=range]{width:min(112px,40vw)}
+    button{font-size:11px;padding:6px 8px}
+    .info{font-size:11px}
   }
 </style>
 </head>
@@ -105,6 +111,9 @@
       <label class="row">Pan <input id="pan" type="range" min="-180" max="180" step="1" value="0"><span class="v mono" id="panV">0°</span></label>
       <label class="row">Tilt <input id="tilt" type="range" min="-60" max="35" step="1" value="0"><span class="v mono" id="tiltV">0°</span></label>
       <label class="row">Height <input id="camH" type="range" min="0.3" max="14" step="0.1" value="1.6"><span class="v mono" id="camHV">1.6m</span></label>
+      <label class="row">Dolly step <input id="dollyStep" type="range" min="0.2" max="5" step="0.1" value="1"><span class="v mono" id="dollyStepV">1.0m</span></label>
+      <button id="dollyIn">Dolly in</button>
+      <button id="dollyOut">Dolly out</button>
       <label class="row">Viewfinder size <input id="vfSize" type="range" min="25" max="60" step="1" value="36"><span class="v mono" id="vfSizeV">36%</span></label>
       <button id="aimBtn">Aim at selected object</button>
       <button id="fsBtn">Fullscreen viewfinder ⛶</button>
@@ -675,6 +684,22 @@ document.querySelectorAll('.fp').forEach(b=>b.onclick=()=>{ if(activeCam){ activ
 ui.pan.addEventListener('input',e=>{ if(activeCam){ activeCam.pan=+e.target.value; refreshCamMarker(activeCam); syncCamUI(); updateInfo(); }});
 ui.tilt.addEventListener('input',e=>{ if(activeCam){ activeCam.tilt=+e.target.value; refreshCamMarker(activeCam); syncCamUI(); updateInfo(); }});
 ui.camH.addEventListener('input',e=>{ if(activeCam){ activeCam.h=+e.target.value; refreshCamMarker(activeCam); syncCamUI(); updateInfo(); }});
+bindRange('dollyStep', ()=>{}, v=>(+v).toFixed(1)+'m');
+function dollyActiveCamera(dir){
+  if(!activeCam) return;
+  const step = +$('dollyStep').value || 1;
+  const pan = D2R(activeCam.pan);
+  const dist = dir * step;
+  // Real dolly: move the camera body along its current viewing direction, separate from focal length.
+  activeCam.x += -Math.sin(pan) * dist;
+  activeCam.z += -Math.cos(pan) * dist;
+  refreshCamMarker(activeCam);
+  syncCamUI();
+  updateInfo();
+  requestRender();
+}
+$('dollyIn').onclick=()=>dollyActiveCamera(1);
+$('dollyOut').onclick=()=>dollyActiveCamera(-1);
 $('addCam').onclick=()=>{ const c=addCamera({x:orb.target.x, z:orb.target.z+10}); aimCamAt(c, orb.target.x, 1, orb.target.z); };
 $('aimBtn').onclick=()=>{
   if(!activeCam) return;
