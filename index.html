@@ -33,8 +33,8 @@
     border-radius:8px;padding:8px;font-size:10.5px;resize:vertical}
   main{position:relative;min-width:0;touch-action:none}
   #c{position:absolute;inset:0;display:block;width:100%;height:100%;touch-action:none}
-  #vf{position:absolute;right:14px;bottom:14px;width:322px;height:182px;pointer-events:none;
-    border:1px solid rgba(242,181,68,.55);border-radius:4px;display:none}
+  #vf{position:absolute;right:14px;top:72px;width:322px;height:182px;pointer-events:auto;touch-action:none;cursor:move;
+    border:1px solid rgba(242,181,68,.55);border-radius:4px;display:none;background:rgba(0,0,0,.12)}
   #vf .osd{position:absolute;left:8px;top:6px;color:var(--amber);font-size:11px;letter-spacing:.08em}
   #vf .osd2{position:absolute;right:8px;top:6px;color:var(--amber);font-size:11px}
   #vf .rec{position:absolute;left:8px;bottom:6px;color:#ff5f4d;font-size:10px;letter-spacing:.12em}
@@ -74,7 +74,7 @@
     body.sidebar-open #panelToggle{left:calc(clamp(230px,64vw,276px) + 8px)}
     .badge{left:104px;right:10px;top:14px;font-size:10px}
     #helpBtn{right:10px;top:52px}
-    #vf{right:10px;bottom:10px;width:min(42vw,220px);height:min(24vw,124px)}
+    #vf{right:10px;top:92px;width:min(38vw,190px);height:min(22vw,107px)}
     #errBox{left:10px;right:10px;bottom:10px;font-size:11px}
     h1{font-size:12px}
     .sub{font-size:10.5px;line-height:1.35}
@@ -111,9 +111,10 @@
       <label class="row">Pan <input id="pan" type="range" min="-180" max="180" step="1" value="0"><span class="v mono" id="panV">0°</span></label>
       <label class="row">Tilt <input id="tilt" type="range" min="-60" max="35" step="1" value="0"><span class="v mono" id="tiltV">0°</span></label>
       <label class="row">Height <input id="camH" type="range" min="0.3" max="14" step="0.1" value="1.6"><span class="v mono" id="camHV">1.6m</span></label>
-      <label class="row">Dolly step <input id="dollyStep" type="range" min="0.2" max="5" step="0.1" value="1"><span class="v mono" id="dollyStepV">1.0m</span></label>
-      <button id="dollyIn">Dolly in</button>
-      <button id="dollyOut">Dolly out</button>
+      <label class="row">Dolly range <input id="dollyRange" type="range" min="1" max="18" step="0.5" value="6"><span class="v mono" id="dollyRangeV">6.0m</span></label>
+      <button id="dollyIn">Dolly in mode</button>
+      <button id="dollyOut">Dolly out mode</button>
+      <label class="row">Dolly move <input id="dollyMove" type="range" min="0" max="100" step="1" value="50"><span class="v mono" id="dollyMoveV">0%</span></label>
       <label class="row">Viewfinder size <input id="vfSize" type="range" min="25" max="60" step="1" value="36"><span class="v mono" id="vfSizeV">36%</span></label>
       <button id="aimBtn">Aim at selected object</button>
       <button id="fsBtn">Fullscreen viewfinder ⛶</button>
@@ -178,7 +179,7 @@
       <ol>
         <li><b>Look around</b> — <u>Mouse:</u> left-drag orbit, right-drag pan, wheel zoom. <u>iPad:</u> one finger to orbit, two fingers to pan and pinch-zoom.</li>
         <li><b>Move things</b> — touch or click a car / person / camera and drag it on the ground. <span class="kbd">Q</span>/<span class="kbd">E</span> rotate, arrow keys nudge (Shift = bigger step).</li>
-        <li><b>Cameras</b> — pick CAM-A/B/C in the sidebar or tap a camera marker in the scene. The bottom-right <b>viewfinder</b> shows exactly what that lens sees. Set focal length 21–135mm (true full-frame FOV), pan / tilt / height, or press <i>Aim at selected object</i>.</li>
+        <li><b>Cameras</b> — pick CAM-A/B/C in the sidebar or tap a camera marker in the scene. The draggable <b>viewfinder</b> shows exactly what that lens sees. Set focal length 21–135mm (true full-frame FOV), pan / tilt / height, or use Dolly mode to push/pull the camera.</li>
         <li><b>Fullscreen viewfinder</b> — judge the composition full screen; Esc or the button to exit.</li>
         <li><b>Export JSON</b> — saves all positions (meters) + camera data.</li>
       </ol>
@@ -569,8 +570,13 @@ function aimCamAt(cam, wx, wy, wz){
   cam.tilt = Math.atan2(dy, Math.hypot(dx,dz))*180/Math.PI;
   refreshCamMarker(cam); syncCamUI();
 }
+let dollyMode = 0, dollyBase = null;
 function selectCamera(cam){
   activeCam = cam; selected = cam? cam.marker : null;
+  dollyMode = 0; dollyBase = null;
+  const di=document.getElementById('dollyIn'), dout=document.getElementById('dollyOut'), dm=document.getElementById('dollyMove'), dmv=document.getElementById('dollyMoveV');
+  if(di) di.classList.remove('on'); if(dout) dout.classList.remove('on');
+  if(dm) dm.value = 50; if(dmv) dmv.textContent = '0%';
   cams.forEach(refreshCamMarker);
   rebuildCamList(); syncCamUI(); updateInfo();
   ui.vf.style.display = cam? 'block':'none';
@@ -684,22 +690,34 @@ document.querySelectorAll('.fp').forEach(b=>b.onclick=()=>{ if(activeCam){ activ
 ui.pan.addEventListener('input',e=>{ if(activeCam){ activeCam.pan=+e.target.value; refreshCamMarker(activeCam); syncCamUI(); updateInfo(); }});
 ui.tilt.addEventListener('input',e=>{ if(activeCam){ activeCam.tilt=+e.target.value; refreshCamMarker(activeCam); syncCamUI(); updateInfo(); }});
 ui.camH.addEventListener('input',e=>{ if(activeCam){ activeCam.h=+e.target.value; refreshCamMarker(activeCam); syncCamUI(); updateInfo(); }});
-bindRange('dollyStep', ()=>{}, v=>(+v).toFixed(1)+'m');
-function dollyActiveCamera(dir){
+bindRange('dollyRange', ()=>applyDollyMove(), v=>(+v).toFixed(1)+'m');
+bindRange('dollyMove', ()=>applyDollyMove(), v=>((+v)-50)+'%');
+function startDollyMode(dir){
   if(!activeCam) return;
-  const step = +$('dollyStep').value || 1;
-  const pan = D2R(activeCam.pan);
-  const dist = dir * step;
-  // Real dolly: move the camera body along its current viewing direction, separate from focal length.
-  activeCam.x += -Math.sin(pan) * dist;
-  activeCam.z += -Math.cos(pan) * dist;
+  dollyMode = dir;
+  dollyBase = {x:activeCam.x, z:activeCam.z, pan:activeCam.pan};
+  $('dollyMove').value = 50;
+  $('dollyMoveV').textContent = '0%';
+  $('dollyIn').classList.toggle('on', dir===1);
+  $('dollyOut').classList.toggle('on', dir===-1);
+  requestRender();
+}
+function applyDollyMove(){
+  if(!activeCam || !dollyMode || !dollyBase) return;
+  const amount = ((+$('dollyMove').value)-50)/50;
+  const range = +$('dollyRange').value || 6;
+  const pan = D2R(dollyBase.pan);
+  const dist = dollyMode * amount * range;
+  // Real dolly: move the camera body along its chosen viewing direction, separate from focal length.
+  activeCam.x = dollyBase.x + -Math.sin(pan) * dist;
+  activeCam.z = dollyBase.z + -Math.cos(pan) * dist;
   refreshCamMarker(activeCam);
   syncCamUI();
   updateInfo();
   requestRender();
 }
-$('dollyIn').onclick=()=>dollyActiveCamera(1);
-$('dollyOut').onclick=()=>dollyActiveCamera(-1);
+$('dollyIn').onclick=()=>startDollyMode(1);
+$('dollyOut').onclick=()=>startDollyMode(-1);
 $('addCam').onclick=()=>{ const c=addCamera({x:orb.target.x, z:orb.target.z+10}); aimCamAt(c, orb.target.x, 1, orb.target.z); };
 $('aimBtn').onclick=()=>{
   if(!activeCam) return;
@@ -736,6 +754,42 @@ if(panelToggle){
     }
   }, {passive:true});
 }
+
+let vfManualPos = null, vfDrag = null;
+function clampVFPos(x,y,w,h){
+  const m = window.innerWidth <= 820 ? 8 : 12;
+  return {
+    x:Math.max(m, Math.min(x, Math.max(m, cssW - w - m))),
+    y:Math.max(m, Math.min(y, Math.max(m, cssH - h - m)))
+  };
+}
+function defaultVFPos(w,h){
+  const m = window.innerWidth <= 820 ? 10 : 14;
+  const top = window.innerWidth <= 820 ? 92 : 72;
+  return clampVFPos(cssW - w - m, top, w, h);
+}
+ui.vf.addEventListener('pointerdown',e=>{
+  if(fullscreenCam) return;
+  e.stopPropagation();
+  ui.vf.setPointerCapture(e.pointerId);
+  const r=ui.vf.getBoundingClientRect();
+  vfDrag={dx:e.clientX-r.left, dy:e.clientY-r.top};
+});
+ui.vf.addEventListener('pointermove',e=>{
+  if(!vfDrag) return;
+  e.stopPropagation();
+  const w=ui.vf.offsetWidth||220, h=ui.vf.offsetHeight||124;
+  vfManualPos = clampVFPos(e.clientX - vfDrag.dx, e.clientY - vfDrag.dy, w, h);
+  requestRender();
+});
+function endVFDrag(e){
+  if(!vfDrag) return;
+  e.stopPropagation();
+  vfDrag=null;
+  requestRender();
+}
+ui.vf.addEventListener('pointerup',endVFDrag);
+ui.vf.addEventListener('pointercancel',endVFDrag);
 
 $('bgFile').onchange=e=>{
   const f=e.target.files[0]; if(!f) return;
@@ -1027,9 +1081,12 @@ function drawFrame(){
       let vw = Math.round(Math.max(240, Math.min(W*frac, W-30)));
       let vh = Math.round(vw*9/16);
       if(vh > H-30){ vh = H-30; vw = Math.round(vh*16/9); }
-      const m=Math.round(14/sx), vx=W-vw-m, vyTop=H-vh-m;
-      renderShot(vx, m, vw, vh);
-      positionVF(vx*sx, vyTop*sx, vw*sx, vh*sx);
+      const vwCss=vw*sx, vhCss=vh*sx;
+      const pos = vfManualPos ? clampVFPos(vfManualPos.x, vfManualPos.y, vwCss, vhCss) : defaultVFPos(vwCss, vhCss);
+      vfManualPos = pos;
+      const vx=Math.round(pos.x/sx), vyTop=Math.round(pos.y/sx);
+      renderShot(vx, Math.max(0, H-vyTop-vh), vw, vh);
+      positionVF(pos.x, pos.y, vwCss, vhCss);
     }
   }
 }
@@ -1041,13 +1098,6 @@ function loop(ts){
   drawFrame();
 }
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) requestRender(); });
-function positionVF(vxCss, vyTopCss, vw, vh){
-  const vf=ui.vf;
-  vf.style.left = vxCss+'px';
-  vf.style.top  = vyTopCss+'px';
-  vf.style.right='auto'; vf.style.bottom='auto';
-  vf.style.width = vw+'px'; vf.style.height = vh+'px';
-}
 function positionVF(vxCss, vyTopCss, vw, vh){
   const vf=ui.vf;
   vf.style.left = vxCss+'px';
