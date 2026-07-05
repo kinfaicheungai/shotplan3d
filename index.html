@@ -32,7 +32,7 @@
   textarea{width:100%;height:96px;background:rgba(0,0,0,.35);color:#dfe8f5;border:1px solid var(--line);
     border-radius:8px;padding:8px;font-size:10.5px;resize:vertical}
   main{position:relative;min-width:0}
-  #c{position:absolute;inset:0;display:block;touch-action:none}
+  #c{position:absolute;inset:0;display:block;width:100%;height:100%;touch-action:none}
   #vf{position:absolute;right:14px;bottom:14px;width:322px;height:182px;pointer-events:none;
     border:1px solid rgba(242,181,68,.55);border-radius:4px;display:none}
   #vf .osd{position:absolute;left:8px;top:6px;color:var(--amber);font-size:11px;letter-spacing:.08em}
@@ -117,6 +117,14 @@
   </div>
 
   <div class="sec">
+    <div class="t">Performance</div>
+    <button id="qHigh" class="on">Quality: High</button><button id="qEco">Eco mode</button>
+    <label class="row">Render scale <input id="rScale" type="range" min="40" max="100" step="5" value="65"><span class="v mono" id="rScaleV">65%</span></label>
+    <label class="row">Shadows <input id="shChk" type="checkbox" checked style="accent-color:var(--amber)"></label>
+    <p class="hint">Renders only when something changes. Lower render scale = far less memory (the picture is upscaled to fit), best if Safari keeps reloading. Eco also turns shadows off.</p>
+  </div>
+
+  <div class="sec">
     <div class="t">Layout</div>
     <button id="exportBtn">Export JSON</button>
     <button id="dlBtn">Download .json</button>
@@ -176,8 +184,10 @@ const D2R = d => d * Math.PI / 180;
 
 const canvas = document.getElementById('c');
 let renderer;
-try{ renderer = new THREE.WebGLRenderer({canvas, antialias:true}); }
+try{ renderer = new THREE.WebGLRenderer({canvas, antialias:false, stencil:false,
+       powerPreference:'low-power', preserveDrawingBuffer:false}); }
 catch(e){ showErr('WebGL is not available in this browser: '+e.message); throw e; }
+renderer.setPixelRatio(1);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputEncoding = THREE.sRGBEncoding;
@@ -206,7 +216,7 @@ const hemi = new THREE.HemisphereLight(0x38507a, 0x0a0c10, .5); scene.add(hemi);
 const amb  = new THREE.AmbientLight(0x1c2740, .9); scene.add(amb);
 const moon = new THREE.DirectionalLight(0x9fc8ff, .9);
 moon.castShadow = true;
-moon.shadow.mapSize.set(2048,2048);
+moon.shadow.mapSize.set(512,512);
 Object.assign(moon.shadow.camera,{left:-38,right:38,top:26,bottom:-26,near:5,far:160});
 moon.shadow.camera.updateProjectionMatrix();
 scene.add(moon); scene.add(moon.target);
@@ -747,17 +757,19 @@ window.addEventListener('keydown',e=>{
 });
 
 /* ================= render loop ================= */
-const clock = new THREE.Clock();
 const tmpSize = new THREE.Vector2();
+let cssW=1, cssH=1, bufW=1, bufH=1;
 function resize(){
-  const w = canvas.clientWidth || canvas.parentElement.clientWidth || window.innerWidth-322;
-  const h = canvas.clientHeight || canvas.parentElement.clientHeight || window.innerHeight;
-  const dpr = Math.min(window.devicePixelRatio||1, 2);
-  if(renderer.getPixelRatio()!==dpr) renderer.setPixelRatio(dpr);
+  cssW = canvas.clientWidth || canvas.parentElement.clientWidth || (window.innerWidth-322);
+  cssH = canvas.clientHeight || canvas.parentElement.clientHeight || window.innerHeight;
+  const scale = quality==='eco' ? 0.5 : (+document.getElementById('rScale').value)/100;
+  // internal buffer = css size * scale, hard-capped so memory stays bounded
+  bufW = Math.max(320, Math.min(Math.round(cssW*scale), 1600));
+  bufH = Math.max(180, Math.round(bufW * cssH/Math.max(1,cssW)));
   renderer.getSize(tmpSize);
-  if(tmpSize.x!==w || tmpSize.y!==h){
-    renderer.setSize(w,h,false);
-    orbitCam.aspect = w/Math.max(1,h); orbitCam.updateProjectionMatrix();
+  if(tmpSize.x!==bufW || tmpSize.y!==bufH){
+    renderer.setSize(bufW, bufH, false);   // false = don't touch CSS; canvas stays stretched to fill
+    orbitCam.aspect = bufW/Math.max(1,bufH); orbitCam.updateProjectionMatrix();
   }
 }
 function renderShot(vx,vy,vw,vh){
@@ -771,39 +783,80 @@ function renderShot(vx,vy,vw,vh){
   renderer.render(scene, shotCam);
   camRoot.visible=true;
 }
-function tick(){
-  resize();
-  const t=clock.getElapsedTime();
+let quality = 'high';
+function setShadows(on){ renderer.shadowMap.enabled = on; scene.traverse(o=>{ if(o.isMesh){ o.castShadow = on && o.userData.wantShadow!==false; } }); moon.castShadow = on; requestRender(); }
+$('qHigh').onclick=()=>{ quality='high'; $('qHigh').classList.add('on'); $('qEco').classList.remove('on'); $('shChk').checked=true; setShadows(true); requestRender(); };
+$('qEco').onclick =()=>{ quality='eco';  $('qEco').classList.add('on');  $('qHigh').classList.remove('on'); $('shChk').checked=false; setShadows(false); requestRender(); };
+bindRange('rScale', ()=>requestRender(), v=>v+'%');
+$('shChk').onchange=e=>setShadows(e.target.checked);
+
+/* ---- on-demand rendering: draw only when something changed ---- */
+let needsRender = true, lastFrame = 0;
+function requestRender(){ needsRender = true; }
+/* any interaction or control change triggers a redraw */
+['pointerdown','pointermove','pointerup','wheel'].forEach(ev=>
+  canvas.addEventListener(ev, requestRender, {passive:true}));
+window.addEventListener('keydown', requestRender);
+window.addEventListener('resize', requestRender);
+document.querySelector('aside').addEventListener('input', requestRender);
+document.querySelector('aside').addEventListener('click', requestRender);
+document.getElementById('fsbar').addEventListener('click', requestRender);
+aerialTex.onUpdate = requestRender;
+/* police light bars flash at 4Hz via a cheap interval instead of a hot loop */
+let flashOn = true;
+setInterval(()=>{
+  flashOn = !flashOn;
+  let has=false;
   draggables.forEach(g=>{ if(g.userData.bars){
-    g.userData.bars[0].material.emissiveIntensity = (Math.sin(t*9)>0)?2.6:.2;
-    g.userData.bars[1].material.emissiveIntensity = (Math.sin(t*9)>0)?.2:2.6;
+    has=true;
+    g.userData.bars[0].material.emissiveIntensity = flashOn? 2.6:.2;
+    g.userData.bars[1].material.emissiveIntensity = flashOn? .2:2.6;
   }});
-  /* all coords below are CSS pixels — three.js scales by pixelRatio internally */
-  const W=canvas.clientWidth, H=canvas.clientHeight;
+  if(has && !document.hidden) requestRender();
+}, 260);
+
+function drawFrame(){
+  resize();
+  const W=bufW, H=bufH;                 // GL coords in buffer pixels
+  const sx = cssW/W;                     // buffer→CSS scale for VF overlay
   renderer.setScissorTest(true);
   if(fullscreenCam && activeCam){
     renderer.setViewport(0,0,W,H); renderer.setScissor(0,0,W,H);
     renderer.setClearColor(0x000000); renderer.clear();
     let vw=W, vh=Math.round(W*9/16);
     if(vh>H){ vh=H; vw=Math.round(H*16/9); }
-    const vx=(W-vw)/2, vyTop=(H-vh)/2;          // vyTop measured from top (CSS)
-    renderShot(vx, H-vyTop-vh, vw, vh);          // GL y measured from bottom
-    positionVF(vx, vyTop, vw, vh);
+    const vx=(W-vw)/2, vyTop=(H-vh)/2;
+    renderShot(vx, H-vyTop-vh, vw, vh);
+    positionVF(vx*sx, vyTop*sx, vw*sx, vh*sx);
   } else {
     refreshRing();
     renderer.setViewport(0,0,W,H); renderer.setScissor(0,0,W,H);
     renderer.render(scene, orbitCam);
     if(activeCam){
       const frac = (+document.getElementById('vfSize').value)/100;
-      let vw = Math.round(Math.max(280, Math.min(W*frac, W-40)));
+      let vw = Math.round(Math.max(240, Math.min(W*frac, W-30)));
       let vh = Math.round(vw*9/16);
-      if(vh > H-40){ vh = H-40; vw = Math.round(vh*16/9); }
-      const m=14, vx=W-vw-m, vyTop=H-vh-m;
+      if(vh > H-30){ vh = H-30; vw = Math.round(vh*16/9); }
+      const m=Math.round(14/sx), vx=W-vw-m, vyTop=H-vh-m;
       renderShot(vx, m, vw, vh);
-      positionVF(vx, vyTop, vw, vh);
+      positionVF(vx*sx, vyTop*sx, vw*sx, vh*sx);
     }
   }
-  requestAnimationFrame(tick);
+}
+function loop(ts){
+  requestAnimationFrame(loop);
+  if(document.hidden || !needsRender) return;
+  if(ts - lastFrame < 33) return;
+  lastFrame = ts; needsRender = false;
+  drawFrame();
+}
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) requestRender(); });
+function positionVF(vxCss, vyTopCss, vw, vh){
+  const vf=ui.vf;
+  vf.style.left = vxCss+'px';
+  vf.style.top  = vyTopCss+'px';
+  vf.style.right='auto'; vf.style.bottom='auto';
+  vf.style.width = vw+'px'; vf.style.height = vh+'px';
 }
 function positionVF(vxCss, vyTopCss, vw, vh){
   const vf=ui.vf;
@@ -821,7 +874,7 @@ function positionVF(vxCss, vyTopCss, vw, vh){
   selectCamera(cams[0]);
   $('exportBtn').click();
 })();
-tick();
+requestAnimationFrame(loop);
 </script>
 </body>
 </html>
