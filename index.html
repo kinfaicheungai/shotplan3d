@@ -121,7 +121,8 @@
     <button id="qHigh" class="on">Quality: High</button><button id="qEco">Eco mode</button>
     <label class="row">Render scale <input id="rScale" type="range" min="40" max="100" step="5" value="65"><span class="v mono" id="rScaleV">65%</span></label>
     <label class="row">Shadows <input id="shChk" type="checkbox" checked style="accent-color:var(--amber)"></label>
-    <p class="hint">Renders only when something changes. Lower render scale = far less memory (the picture is upscaled to fit), best if Safari keeps reloading. Eco also turns shadows off.</p>
+    <label class="row">Light textures <input id="texChk" type="checkbox" checked style="accent-color:var(--amber)"></label>
+    <p class="hint">Renders only when something changes. Lower render scale = far less memory (the picture is upscaled to fit), best if Safari keeps reloading. Eco also turns shadows off. Light textures add cheap surface detail (grass ground, wall siding); turn off if the iPad feels heavy.</p>
   </div>
 
   <div class="sec">
@@ -270,7 +271,46 @@ function makeLabel(text, scale=1){
   return sp;
 }
 
-/* ================= church house ================= */
+/* ================= lightweight procedural textures ================= */
+function canvasTex(w,h,draw,repeat){
+  const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+  draw(cv.getContext('2d'), w, h);
+  const t=new THREE.CanvasTexture(cv);
+  t.wrapS=t.wrapT=THREE.RepeatWrapping;
+  if(repeat) t.repeat.set(repeat[0],repeat[1]);
+  t.encoding=THREE.sRGBEncoding;
+  return t;
+}
+const texGrass = canvasTex(128,128,(g,w,h)=>{
+  g.fillStyle='#2f3a26'; g.fillRect(0,0,w,h);
+  for(let i=0;i<1400;i++){ g.fillStyle=['#354427','#3d4d2b','#293620','#425331'][i&3];
+    const x=Math.random()*w,y=Math.random()*h; g.fillRect(x,y,1,1+Math.random()*2); }
+},[26,15]);
+const texSiding = canvasTex(64,128,(g,w,h)=>{
+  g.fillStyle='#e6e0cf'; g.fillRect(0,0,w,h);
+  for(let y=0;y<h;y+=9){ g.fillStyle='rgba(120,110,90,.32)'; g.fillRect(0,y,w,1);
+    g.fillStyle='rgba(255,255,255,.25)'; g.fillRect(0,y+1,w,1); }
+},[1,3]);
+const texRoof = canvasTex(64,64,(g,w,h)=>{
+  g.fillStyle='#76808c'; g.fillRect(0,0,w,h);
+  for(let y=0;y<h;y+=6){ g.fillStyle='rgba(40,48,58,.4)'; g.fillRect(0,y,w,1); }
+},[3,4]);
+const texturedMats = [];
+function useTextures(on){
+  texturedMats.forEach(o=>{
+    o.mat.map = on? o.tex : null;
+    if(!on) o.mat.color.setHex(o.base);
+    else o.mat.color.setHex(0xffffff);
+    o.mat.needsUpdate=true;
+  });
+  requestRender();
+}
+
+const grassMat = new THREE.MeshLambertMaterial({color:0x2f3a26});
+const grassBase = new THREE.Mesh(new THREE.PlaneGeometry(320,320), grassMat);
+grassBase.rotation.x=-Math.PI/2; grassBase.position.y=-.03; grassBase.receiveShadow=true; scene.add(grassBase);
+texturedMats.push({mat:grassMat, tex:texGrass, base:0x2f3a26});
+
 const WALL=0xe6e0cf, ROOF=0x76808c, TRIM=0xf3f1ea, GLOW=0xffd493;
 const winMats = [];
 function glowPlane(w,h){
@@ -321,6 +361,13 @@ let houseLightA, houseLightB;
   house.rotation.y = D2R(-8);
   scene.add(house);
 })();
+/* attach light textures to walls (WALL color) and roofs (ROOF color) */
+house.traverse(o=>{
+  if(!o.isMesh || !o.material || !o.material.color) return;
+  const hex = o.material.color.getHex();
+  if(hex===WALL){ texturedMats.push({mat:o.material, tex:texSiding, base:WALL}); }
+  else if(hex===ROOF){ texturedMats.push({mat:o.material, tex:texRoof, base:ROOF}); }
+});
 
 /* ================= trees ================= */
 function makeTree(s, px, pz){
@@ -435,20 +482,27 @@ function vfovOf(f){ return 2*Math.atan(12/f)*180/Math.PI; }
 function hfovOf(f){ return 2*Math.atan(18/f)*180/Math.PI; }
 function makeCamMarker(cam){
   const g = new THREE.Group();
-  g.userData = {type:'camera', draggable:true, cam, selR:.9};
+  g.userData = {type:'camera', draggable:true, cam, selR:1.3};
+  // large invisible hit pad — makes the camera easy to grab by touch
+  const hitPad = new THREE.Mesh(new THREE.SphereGeometry(1.05,10,8),
+    new THREE.MeshBasicMaterial({visible:false}));
+  hitPad.position.y=.3; g.add(hitPad); reg(hitPad,g);
   const pitch = new THREE.Group(); g.add(pitch);
-  const body = box(.34,.24,.22,0x1b1e24,.5); pitch.add(body); reg(body,g);
-  const lens = shadow(new THREE.Mesh(new THREE.ConeGeometry(.1,.22,10),
+  const body = box(.55,.4,.36,0x22262e,.5); pitch.add(body); reg(body,g);
+  const lens = shadow(new THREE.Mesh(new THREE.ConeGeometry(.17,.36,12),
     new THREE.MeshStandardMaterial({color:0x0e1013})));
-  lens.rotation.x = -Math.PI/2; lens.position.set(0,0,-.26); pitch.add(lens); reg(lens,g);
-  const tally = new THREE.Mesh(new THREE.SphereGeometry(.035,8,8),
+  lens.rotation.x = -Math.PI/2; lens.position.set(0,0,-.42); pitch.add(lens); reg(lens,g);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(.17,.04,8,16),
+    new THREE.MeshStandardMaterial({color:0xf2b544, emissive:0xf2b544, emissiveIntensity:.5}));
+  ring.position.set(0,0,-.42); pitch.add(ring);
+  const tally = new THREE.Mesh(new THREE.SphereGeometry(.06,8,8),
     new THREE.MeshStandardMaterial({color:0x000000, emissive:0xf2b544, emissiveIntensity:1.6}));
-  tally.position.set(0,.16,.08); pitch.add(tally);
-  const stand = box(.05,1,.05,0x30343c); stand.position.y=-.5; g.add(stand);
+  tally.position.set(0,.26,.12); pitch.add(tally);
+  const stand = box(.07,1,.07,0x30343c); stand.position.y=-.5; g.add(stand);
   const frMat = new THREE.LineBasicMaterial({color:0xf2b544, transparent:true, opacity:.8});
   const frustum = new THREE.LineSegments(new THREE.BufferGeometry(), frMat);
   pitch.add(frustum);
-  const label = makeLabel(cam.name,.9); label.position.y=.75; g.add(label);
+  const label = makeLabel(cam.name,1.15); label.position.y=.95; g.add(label);
   camRoot.add(g);
   cam.marker=g; cam.pitchGrp=pitch; cam.frustum=frustum; cam.label=label; cam.tally=tally;
   refreshCamMarker(cam);
@@ -682,6 +736,20 @@ function setNDCxy(clientX, clientY){
   ndc.y=-((clientY-r.top)/r.height)*2+1;
 }
 function pointerList(){ return [...activePointers.values()]; }
+const _pv = new THREE.Vector3();
+function nearestCameraToPointer(clientX, clientY, pxRadius){
+  const r=canvas.getBoundingClientRect();
+  let best=null, bestD=pxRadius;
+  cams.forEach(c=>{
+    _pv.set(c.x, c.h+0.3, c.z).project(orbitCam);
+    if(_pv.z>1) return;                       // behind camera
+    const sx=(_pv.x*0.5+0.5)*r.width + r.left;
+    const sy=(-_pv.y*0.5+0.5)*r.height + r.top;
+    const d=Math.hypot(sx-clientX, sy-clientY);
+    if(d<bestD){ bestD=d; best=c.marker; }
+  });
+  return best;
+}
 function twoFingerMid(){
   const p=pointerList(); return {x:(p[0].x+p[1].x)/2, y:(p[0].y+p[1].y)/2}; }
 function twoFingerDist(){
@@ -709,8 +777,12 @@ canvas.addEventListener('pointerdown',e=>{
   const isPrimaryDrag = (e.pointerType!=='mouse') || e.button===0;
   if(isPrimaryDrag){
     const hits = ray.intersectObjects(pickMeshes);
-    if(hits.length){
-      const root = hits[0].object.userData.root;
+    let root = hits.length ? hits[0].object.userData.root : null;
+    // touch-snap: if nothing hit (or only ground), grab the nearest camera within screen range
+    if(!root){
+      root = nearestCameraToPointer(e.clientX, e.clientY, e.pointerType==='mouse'? 26 : 46);
+    }
+    if(root){
       selected = root;
       if(root.userData.type==='camera') selectCamera(root.userData.cam);
       else lastObjSelected = root;
@@ -842,9 +914,11 @@ function renderShot(vx,vy,vw,vh){
 let quality = 'high';
 function setShadows(on){ renderer.shadowMap.enabled = on; scene.traverse(o=>{ if(o.isMesh){ o.castShadow = on && o.userData.wantShadow!==false; } }); moon.castShadow = on; requestRender(); }
 $('qHigh').onclick=()=>{ quality='high'; $('qHigh').classList.add('on'); $('qEco').classList.remove('on'); $('shChk').checked=true; setShadows(true); requestRender(); };
-$('qEco').onclick =()=>{ quality='eco';  $('qEco').classList.add('on');  $('qHigh').classList.remove('on'); $('shChk').checked=false; setShadows(false); requestRender(); };
+$('qEco').onclick =()=>{ quality='eco';  $('qEco').classList.add('on');  $('qHigh').classList.remove('on'); $('shChk').checked=false; setShadows(false); $('texChk').checked=false; useTextures(false); requestRender(); };
 bindRange('rScale', ()=>requestRender(), v=>v+'%');
 $('shChk').onchange=e=>setShadows(e.target.checked);
+$('texChk').onchange=e=>useTextures(e.target.checked);
+useTextures(true);
 
 /* ---- on-demand rendering: draw only when something changed ---- */
 let needsRender = true, lastFrame = 0;
